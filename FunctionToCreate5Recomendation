@@ -1,0 +1,143 @@
+import networkx
+from operator import itemgetter
+import matplotlib.pyplot as plt
+import pandas as pd
+
+
+# Read the data from amazon-books.csv into amazonBooks dataframe;
+amazonBooks = pd.read_csv('./amazon-books.csv', index_col=0)
+
+# Read the data from amazon-books-copurchase.adjlist;
+# assign it to copurchaseGraph weighted Graph;
+# node = ASIN, edge= copurchase, edge weight = category similarity
+fhr=open("amazon-books-copurchase.edgelist", 'rb')
+copurchaseGraph=networkx.read_weighted_edgelist(fhr)
+fhr.close()
+
+# Now let's assume a person is considering buying the following book;
+# what else can we recommend to them based on copurchase behavior 
+# we've seen from other users?
+print ("Looking for Recommendations for Customer Purchasing this Book:")
+print ("--------------------------------------------------------------")
+purchasedAsin = '0805047905'
+
+# Let's first get some metadata associated with this book
+print ("ASIN = ", purchasedAsin) 
+print ("Title = ", amazonBooks.loc[purchasedAsin,'Title'])
+print ("SalesRank = ", amazonBooks.loc[purchasedAsin,'SalesRank'])
+print ("TotalReviews = ", amazonBooks.loc[purchasedAsin,'TotalReviews'])
+print ("AvgRating = ", amazonBooks.loc[purchasedAsin,'AvgRating'])
+print ("DegreeCentrality = ", amazonBooks.loc[purchasedAsin,'DegreeCentrality'])
+print ("ClusteringCoeff = ", amazonBooks.loc[purchasedAsin,'ClusteringCoeff'])
+
+# Now let's look at the ego network associated with purchasedAsin in the
+# copurchaseGraph - which is esentially comprised of all the books 
+# that have been copurchased with this book in the past
+# (1) YOUR CODE HERE: 
+#     Get the depth-1 ego network of purchasedAsin from copurchaseGraph,
+#     and assign the resulting graph to purchasedAsinEgoGraph.
+purchasedAsinEgoGraph = networkx.ego_graph(copurchaseGraph,purchasedAsin,radius=1)
+
+#purchasedAsinEgoGraph = networkx.Graph()
+networkx.draw(purchasedAsinEgoGraph)
+
+# Next, recall that the edge weights in the copurchaseGraph is a measure of
+# the similarity between the books connected by the edge. So we can use the 
+# island method to only retain those books that are highly simialr to the 
+# purchasedAsin
+# (2) YOUR CODE HERE: 
+#     Use the island method on purchasedAsinEgoGraph to only retain edges with 
+#     threshold >= 0.5, and assign resulting graph to purchasedAsinEgoTrimGraph
+threshold = 0.5
+purchasedAsinEgoTrimGraph = networkx.Graph()
+for f, t, e in purchasedAsinEgoGraph.edges(data=True):
+    if e['weight'] >= threshold:
+        purchasedAsinEgoTrimGraph.add_edge(f,t,weight=e['weight'])
+        
+        
+pos=networkx.spring_layout(purchasedAsinEgoTrimGraph)
+plt.figure(figsize=(10,10))
+networkx.draw_networkx_nodes(purchasedAsinEgoTrimGraph,pos,node_size=1500)
+networkx.draw_networkx_labels(purchasedAsinEgoTrimGraph,pos,font_size=20)
+edgewidth = [ d['weight'] for (u,v,d) in purchasedAsinEgoTrimGraph.edges(data=True)]
+networkx.draw_networkx_edges(purchasedAsinEgoTrimGraph,pos,width=edgewidth)
+edgelabel = networkx.get_edge_attributes(purchasedAsinEgoTrimGraph,'weight')
+networkx.draw_networkx_edge_labels(purchasedAsinEgoTrimGraph,pos,edge_labels=edgelabel,font_size=20)
+plt.axis('off') 
+plt.show()
+
+#next, recall that given the purchasedAsinEgoTrimGraph you constructed above, 
+# you can get at the list of nodes connected to the purchasedAsin by a single 
+# hop (called the neighbors of the purchasedAsin) 
+# (3) YOUR CODE HERE: 
+#     Find the list of neighbors of the purchasedAsin in the 
+#     purchasedAsinEgoTrimGraph, and assign it to purchasedAsinNeighbors
+purchasedAsinNeighbors = [i for i in purchasedAsinEgoTrimGraph.neighbors(purchasedAsin)]
+
+
+#creating the dataframe for neighbors
+uf=pd.DataFrame()
+for i in range(len(purchasedAsinNeighbors)):
+        x= amazonBooks.loc[[purchasedAsinNeighbors[i]],['AvgRating','ClusteringCoeff','DegreeCentrality','SalesRank','TotalReviews']]
+        uf=pd.concat((uf,x),axis=0)
+        
+# coping the data in new df
+recomdf = uf.copy()
+
+# dropping rows with  0 avg rating and 0 total reviews
+drop_a = recomdf[(recomdf['AvgRating']==0) | (recomdf['TotalReviews']==0) ].index
+recomdf.drop(index=drop_a,inplace=True)
+
+# using the apt scaler
+from sklearn.preprocessing import  MaxAbsScaler,RobustScaler
+
+maxi = MaxAbsScaler()
+rb = RobustScaler()
+max_scaler = pd.DataFrame(maxi.fit_transform(recomdf[a]), columns=['max'+ x for x in a ], index=recomdf.index)
+rb_scaler = pd.DataFrame(rb.fit_transform(recomdf[c]),columns=['rb'+ x for x in c ], index=recomdf.index)
+
+# normalizing other 2 columns using log function
+import numpy as np
+recomdf['log_TotalReview'] = np.log(recomdf['TotalReviews'])
+recomdf['log_AvgRating'] = np.log(recomdf['AvgRating'])
+recomdf = pd.concat((recomdf,max_scaler,rb_scaler),axis=1)
+
+# function for getting the rank
+recomdf['ranking'] = (((recomdf['log_TotalReview']*recomdf['log_AvgRating'])/(recomdf['maxSalesRank']))+
+                    (recomdf['rbDegreeCentrality']*recomdf['ClusteringCoeff']))
+                    
+recomdf.sort_values(by=['ranking'],ascending=False).head(10)
+
+# sorting by the rank and displaying top 5 books
+final_reco_df = recomdf.sort_values(by=['ranking'],ascending=False).head(5)
+
+#drooping columns 
+final_reco_df.drop(['log_AvgRating','log_TotalReview','maxSalesRank','rbDegreeCentrality','ranking'],axis=1,inplace=True)
+
+title = pd.DataFrame(amazonBooks['Title'],index=amazonBooks.index)
+title.sample(10)
+
+final_output = pd.concat([final_reco_df,title],axis=1,join ='inner')
+final_output
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
